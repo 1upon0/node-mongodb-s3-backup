@@ -6,6 +6,18 @@ var exec = require('child_process').exec
   , domain = require('domain')
   , d = domain.create();
 
+
+/**
+ * isBlank
+ *
+ * Checks whether a string is blank, null or undefined.
+ *
+ * @param str  the string to check
+ */
+function isBlank(str) {
+  return (!str || /^\s*$/.test(str));
+}
+
 /**
  * log
  *
@@ -74,6 +86,26 @@ function removeRF(target, callback) {
   });
 }
 
+/* mkdir
+ *
+ * Creates a directory.
+ *
+ * @param target       path to the new directory
+ * @param callback     callback(error)
+ */
+function mkdir(target, callback) {
+  var fs = require('fs');
+
+  callback = callback || function() { };
+
+  fs.exists(target, function(exists) {
+    if (!exists) {
+      log("Creating folder " + target, 'info');
+      exec('mkdir -p ' + target, callback);
+    }
+  });
+}
+
 /**
  * mongoDump
  *
@@ -91,9 +123,11 @@ function mongoDump(options, directory, callback) {
 
   mongoOptions= [
     '-h', options.host + ':' + options.port,
-    '-d', options.db,
     '-o', directory
   ];
+  if (!isBlank(options.db)) {
+    mongoOptions.append('-d', options.db);
+  }
 
   if(options.username && options.password) {
     mongoOptions.push('-u');
@@ -103,7 +137,7 @@ function mongoDump(options, directory, callback) {
     mongoOptions.push(options.password);
   }
 
-  log('Starting mongodump of ' + options.db, 'info');
+  log('Starting mongodump of ' + options.backupName, 'info');
   mongodump = spawn('mongodump', mongoOptions);
 
   mongodump.stdout.on('data', function (data) {
@@ -146,7 +180,7 @@ function compressDirectory(directory, input, output, callback) {
     input
   ];
 
-  log('Starting compression of ' + input + ' into ' + output, 'info');
+  log('Starting compression of ' + directory+'/'+input + ' into ' + directory+'/'+output, 'info');
   tar = spawn('tar', tarOptions, { cwd: directory });
 
   tar.stderr.on('data', function (data) {
@@ -155,7 +189,7 @@ function compressDirectory(directory, input, output, callback) {
 
   tar.on('exit', function (code) {
     if(code === 0) {
-      log('successfully compress directory', 'info');
+      log('Successfully compressed directory', 'info');
       callback(null);
     } else {
       callback(new Error("Tar exited with code " + code));
@@ -189,8 +223,9 @@ function sendToS3(options, directory, target, callback) {
   if (options.encrypt)
     headers = {"x-amz-server-side-encryption": "AES256"}
 
-  log('Attemping to upload ' + target + ' to the ' + options.bucket + ' s3 bucket');
-  s3client.putFile(sourceFile, path.join(destination, target), headers, function(err, res){
+  var destinationFile = path.join(destination, target);
+  log('Attemping to upload ' + sourceFile + ' to the ' + options.bucket + ' s3 bucket into ' + destinationFile);
+  s3client.putFile(sourceFile, destinationFile, headers, function(err, res){
     if(err) {
       return callback(err);
     }
@@ -226,28 +261,38 @@ function sendToS3(options, directory, target, callback) {
  * @param callback        callback(err)
  */
 function sync(mongodbConfig, s3Config, callback) {
+  if(isBlank(mongodbConfig.db)) {
+    mongodbConfig.backupName = 'all';
+    log('No database to be backed up is specified. Using backup name: ' + mongodbConfig.backupName);
+  } else {
+    mongodbConfig.backupName = mongodbConfig.db;
+  }
+
   var tmpDir = path.join(require('os').tmpDir(), 'mongodb_s3_backup')
-    , backupDir = path.join(tmpDir, mongodbConfig.db)
-    , archiveName = getArchiveName(mongodbConfig.db)
+    , dumpDir = path.join(tmpDir, 'dump')
+    , backupDir = path.join(tmpDir, mongodbConfig.backupName)
+    , archiveName = getArchiveName(mongodbConfig.backupName)
     , async = require('async')
     , tmpDirCleanupFns;
 
   callback = callback || function() { };
 
   tmpDirCleanupFns = [
+    async.apply(removeRF, dumpDir),
     async.apply(removeRF, backupDir),
+    async.apply(mkdir, backupDir),
     async.apply(removeRF, path.join(tmpDir, archiveName))
   ];
 
   async.series(tmpDirCleanupFns.concat([
-    async.apply(mongoDump, mongodbConfig, tmpDir),
-    async.apply(compressDirectory, tmpDir, mongodbConfig.db, archiveName),
-    d.bind(async.apply(sendToS3, s3Config, tmpDir, archiveName)) // this function sometimes throws EPIPE errors
+    async.apply(mongoDump, mongodbConfig, dumpDir),
+    async.apply(compressDirectory, backupDir, '../dump/', archiveName),
+    d.bind(async.apply(sendToS3, s3Config, backupDir, archiveName)) // this function sometimes throws EPIPE errors
   ]), function(err) {
     if(err) {
       log(err, 'error');
     } else {
-      log('Successfully backed up ' + mongodbConfig.db);
+      log('Successfully backed up ' + mongodbConfig.backupName);
     }
     // cleanup folders
     async.series(tmpDirCleanupFns, function() {
