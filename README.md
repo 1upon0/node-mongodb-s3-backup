@@ -1,12 +1,17 @@
-# Node MongoDB / S3 Backup
+# Node.js - MongoDB and Files backup to Amazon S3
 
-This is a package that makes backing up your mongo databases to S3 simple.
+This is a package that makes backing up your mongo databases and local files to S3 simple.
 The binary file is a node cronjob that runs at midnight every day and backs up
-the database specified in the config file.
+the database and files (wildcards/globs supported) specified in the config file.
+
+PS: In cronjob mode, the process runs forever. You can use `nohup s3_backup <path_to_config.json> 2>&1 > /dev/null &` to send the process to background forever and supress output.
+You can also use your own scheduler and pass `-n` as the first argument to `s3_backup` to run the backup and exit immediately.
+
+PS: This package has been forked from <https://github.com/theycallmeswift/node-mongodb-s3-backup> to add support for custom files to the backup.
 
 ## Installation
 
-    npm install mongodb_s3_backup -g
+    npm install s3_backup -g
 
 ## Configuration
 
@@ -22,20 +27,23 @@ The file should have the following format:
         "password": false,
         "db": "database_to_backup"
       },
+      "files": {
+        paths: ["test_dir/**/*","images/*.jpg","onefile.txt"]
+      },
       "s3": {
         "key": "your_s3_key",
         "secret": "your_s3_secret",
         "bucket": "s3_bucket_to_upload_to",
         "destination": "/",
         "encrypt": true,
-        "region": "s3_region_to_use"
+        "region": "ap-southeast-1" //s3_region_to_use
       },
       "cron": {
         "time": "11:59",
       }
     }
 
-All options in the "s3" object, except for desination, will be directly passed to knox, therefore, you can include any of the options listed [in the knox documentation](https://github.com/LearnBoost/knox#client-creation-options "Knox README").
+All options in the "s3" object will be directly passed to knox, therefore, you can include any of the options listed [in the knox documentation](https://github.com/LearnBoost/knox#client-creation-options "Knox README").
 
 ### Crontabs
 
@@ -65,8 +73,8 @@ You must first `npm install time` to use "timezone" specification.
 
 To start a long-running process with scheduled cron job:
 
-    mongodb_s3_backup <path to config file>
+    s3_backup <path to config file>
 
 To execute a backup immediately and exit:
 
-    mongodb_s3_backup -n <path to config file>
+    s3_backup -n <path to config file>
